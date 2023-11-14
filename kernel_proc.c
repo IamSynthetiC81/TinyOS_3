@@ -1,9 +1,9 @@
-
 #include <assert.h>
 #include "kernel_cc.h"
 #include "kernel_proc.h"
 #include "kernel_streams.h"
-
+#include "tinyos.h"
+#include "kernel_pipe.h"
 
 /* 
  The process table and related system calls:
@@ -35,10 +35,11 @@ static inline void initialize_PCB(PCB* pcb)
   pcb->pstate = FREE;
   pcb->argl = 0;
   pcb->args = NULL;
-
+  pcb->thread_count = 0 ;
   for(int i=0;i<MAX_FILEID;i++)
     pcb->FIDT[i] = NULL;
 
+  rlnode_init(& pcb->ptcb_list, NULL);
   rlnode_init(& pcb->children_list, NULL);
   rlnode_init(& pcb->exited_list, NULL);
   rlnode_init(& pcb->children_node, pcb);
@@ -71,7 +72,23 @@ void initialize_processes()
   if(Exec(NULL,0,NULL)!=0)
     FATAL("The scheduler process does not have pid==0");
 }
+//NEW initialization of PTCB
+ PTCB* initialize_ptcb(){
 
+PTCB* ptcb=(PTCB*)xmalloc(sizeof(PTCB));
+ptcb->tcb  = NULL;
+ptcb->task = NULL;
+ptcb->argl = 0;
+ptcb->args = NULL;
+ptcb->exitval = 0;
+ptcb->refcount = 0;
+ptcb->detached = 0;
+ptcb->exited = 0;
+ptcb->exit_cv = COND_INIT;
+rlnode_init(&ptcb->ptcb_list_node , ptcb);
+
+return ptcb;
+}
 
 /*
   Must be called with kernel_mutex held
@@ -123,8 +140,18 @@ void start_main_thread()
   exitval = call(argl,args);
   Exit(exitval);
 }
+//NEWW
+void start_thread(){
+  int exitval;
+  TCB* tcb = cur_thread();
+  Task call = tcb->ptcb->task;
+  int argl  = tcb->ptcb->argl;
+  void* args = tcb->ptcb->args;
 
+exitval = call(argl,args);
+sys_ThreadExit(exitval);
 
+}
 /*
 	System call to create a new process.
  */
@@ -134,6 +161,7 @@ Pid_t sys_Exec(Task call, int argl, void* args)
   
   /* The new process PCB */
   newproc = acquire_PCB();
+
 
   if(newproc == NULL) goto finish;  /* We have run out of PIDs! */
 
@@ -177,9 +205,18 @@ Pid_t sys_Exec(Task call, int argl, void* args)
     we do, because once we wakeup the new thread it may run! so we need to have finished
     the initialization of the PCB.
    */
+  //NEW
   if(call != NULL) {
-    newproc->main_thread = spawn_thread(newproc, start_main_thread);
-    wakeup(newproc->main_thread);
+    PTCB* ptcb = initialize_ptcb();
+    ptcb->tcb = spawn_thread(newproc, ptcb, start_main_thread);
+    rlist_push_front(&newproc->ptcb_list, &ptcb->ptcb_list_node);
+    ptcb->task = newproc->main_task;
+    ptcb->argl = newproc->argl;
+    ptcb->args = newproc->args;
+    newproc->thread_count++;
+    newproc->main_thread=ptcb->tcb;
+    wakeup(ptcb->tcb);
+    
   }
 
 
@@ -285,10 +322,11 @@ Pid_t sys_WaitChild(Pid_t cpid, int* status)
 }
 
 
+//NEW 
 void sys_Exit(int exitval)
 {
 
-  PCB *curproc = CURPROC;  /* cache for efficiency */
+PCB *curproc = CURPROC;  /* cache for efficiency */
 
   /* First, store the exit status */
   curproc->exitval = exitval;
@@ -301,66 +339,94 @@ void sys_Exit(int exitval)
 
     while(sys_WaitChild(NOPROC,NULL)!=NOPROC);
 
-  } else {
+  } 
+  //Then we move to ThreadExit where all necessary clean-up takes place.
+  sys_ThreadExit(exitval);
+}
 
-    /* Reparent any children of the exiting process to the 
-       initial task */
-    PCB* initpcb = get_pcb(1);
-    while(!is_rlist_empty(& curproc->children_list)) {
-      rlnode* child = rlist_pop_front(& curproc->children_list);
-      child->pcb->parent = initpcb;
-      rlist_push_front(& initpcb->children_list, child);
-    }
+//NEWWW 
 
-    /* Add exited children to the initial task's exited list 
-       and signal the initial task */
-    if(!is_rlist_empty(& curproc->exited_list)) {
-      rlist_append(& initpcb->exited_list, &curproc->exited_list);
-      kernel_broadcast(& initpcb->child_exit);
-    }
+int procinfo_read(void* _procinfo_cb, char* buf, unsigned int size){
 
-    /* Put me into my parent's exited list */
-    rlist_push_front(& curproc->parent->exited_list, &curproc->exited_node);
-    kernel_broadcast(& curproc->parent->child_exit);
+  procinfo_cb* procinfocb = (procinfo_cb*)_procinfo_cb;
+
+  while(procinfocb->PCB_cursor < MAX_PROC &&
+    PT[procinfocb->PCB_cursor].pstate == FREE){
+
+      procinfocb->PCB_cursor++;
 
   }
+  if(procinfocb->PCB_cursor==MAX_PROC) return 0;
 
-  assert(is_rlist_empty(& curproc->children_list));
-  assert(is_rlist_empty(& curproc->exited_list));
-
-
-  /* 
-    Do all the other cleanup we want here, close files etc. 
-   */
-
-  /* Release the args data */
-  if(curproc->args) {
-    free(curproc->args);
-    curproc->args = NULL;
-  }
-
-  /* Clean up FIDT */
-  for(int i=0;i<MAX_FILEID;i++) {
-    if(curproc->FIDT[i] != NULL) {
-      FCB_decref(curproc->FIDT[i]);
-      curproc->FIDT[i] = NULL;
+  PCB* pcb = &PT[procinfocb->PCB_cursor];
+  procinfocb->info.alive = (pcb->pstate == ALIVE) ? 1 : 0;
+  procinfocb->info.argl = pcb->argl;
+  int i;
+  if(pcb->args!=NULL){
+    char* cargs = (char *)pcb->args;
+    for(i=0;i<size;i++){
+      if(i==PROCINFO_MAX_ARGS_SIZE) break;
+      procinfocb->info.args[i] = cargs[i];
+    
     }
   }
+  procinfocb->info.main_task = pcb->main_task;
+  procinfocb->info.pid = get_pid(pcb);
+  
+  PCB* parent_pcb = pcb->parent;
+  if(procinfocb->info.pid!=1)
+    procinfocb->info.ppid = get_pid(parent_pcb);
 
-  /* Disconnect my main_thread */
-  curproc->main_thread = NULL;
+  procinfocb->info.thread_count = pcb->thread_count;
 
-  /* Now, mark the process as exited. */
-  curproc->pstate = ZOMBIE;
+  memcpy(buf, (char*)&procinfocb->info, sizeof(procinfo));
 
-  /* Bye-bye cruel world */
-  kernel_sleep(EXITED, SCHED_USER);
+  procinfocb->PCB_cursor++;
+  return 1;
 }
 
 
+int procinfo_close(void* _procinfo_cb){
+
+  procinfo_cb* procinfocb = (procinfo_cb*)_procinfo_cb;
+  free(procinfocb);
+
+  return 0;
+}
+
+
+file_ops procinfo_ops = {
+  .Open = do_nothing_pt,
+  .Read = procinfo_read,
+  .Write = do_nothing,
+  .Close = procinfo_close
+};
+
+procinfo_cb* initialize_procinfo_cb(){
+
+  procinfo_cb* procinfocb = (procinfo_cb*)xmalloc(sizeof(procinfo_cb));
+  procinfocb->PCB_cursor=1;
+  procinfocb->fcb = NULL;
+  procinfocb->refcount = 0;
+  return procinfocb;
+}
 
 Fid_t sys_OpenInfo()
 {
-	return NOFILE;
+  Fid_t fid;
+  FCB* fcb;
+
+  if(!FCB_reserve(1, &fid, &fcb)) return NOFILE;
+
+  procinfo_cb* procinfocb = initialize_procinfo_cb();
+
+  fcb->streamfunc = &procinfo_ops;
+  fcb->streamobj = procinfocb;
+
+  procinfocb->fcb = fcb;
+ 
+
+
+  return fid;
 }
 

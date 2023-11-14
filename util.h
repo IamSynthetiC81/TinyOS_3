@@ -286,13 +286,16 @@ static inline void * xmalloc (size_t size)
 
 typedef struct process_control_block PCB;	/**< @brief Forward declaration */
 typedef struct thread_control_block TCB;	/**< @brief Forward declaration */
+typedef struct process_thread_control_block PTCB; //NEW STRUCTURE (PTCB STRUCTURE)
 typedef struct core_control_block CCB;		/**< @brief Forward declaration */
 typedef struct device_control_block DCB;	/**< @brief Forward declaration */
 typedef struct file_control_block FCB;		/**< @brief Forward declaration */
 
 /** @brief A convenience typedef */
 typedef struct resource_list_node * rlnode_ptr;
-
+typedef struct struct_pipe_control_block pipe_cb;//NEWW
+typedef struct struct_socket_control_block socket_cb;//NEWW
+typedef struct procinfo_control_block procinfo_cb;//NEWW
 /**
 	@brief List node
 */
@@ -311,6 +314,7 @@ typedef struct resource_list_node {
   union {
     PCB* pcb; 
     TCB* tcb;
+    PTCB* ptcb;//NEWW
     CCB* ccb;
     DCB* dcb;
     FCB* fcb;

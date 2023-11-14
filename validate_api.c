@@ -108,6 +108,7 @@ static void waitchild_error()
 	ASSERT(WaitChild(MAX_PROC, NULL)==NOPROC);
 	ASSERT(WaitChild(GetPid()+1, NULL)==NOPROC);
 }
+
 static int subprocess(int argl, void* args) 
 {
 	ASSERT(GetPid()!=1);
@@ -860,13 +861,8 @@ BOOT_TEST(test_write_error_on_bad_fid,
 	"Test that Write will return an error when called on a bad fid"
 	)
 {
-	/* The compiler is a bit overzealous here, so we are forced to suppress the
-	warning */
-#pragma GCC diagnostic push                             // save the actual diag context
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized" 	
 	char buffer[10];
 	ASSERT(Write(0, buffer, 10)==-1);
-#pragma GCC diagnostic pop
 	return 0;
 }
 
@@ -1690,6 +1686,7 @@ void connect_sockets(Fid_t sock1, Fid_t lsock, Fid_t* sock2, port_t port)
 }
 
 
+
 void check_transfer(Fid_t from, Fid_t to)
 {
 	char buffer[12] = {[0]=0};
@@ -1860,8 +1857,9 @@ BOOT_TEST(test_accept_reusable,
 	return 0;
 }
 
-
 /* Helper for test_accept_fails_on_exhausted_fid */
+
+
 static int accept_connection_assert_fail(int argl, void* args) 
 {
 	ASSERT(argl==sizeof(Fid_t));
@@ -1869,6 +1867,8 @@ static int accept_connection_assert_fail(int argl, void* args)
 	ASSERT(Accept(lsock)==NOFILE);
 	return 0;
 }
+
+
 
 
 BOOT_TEST(test_accept_fails_on_exhausted_fid,
@@ -1893,15 +1893,17 @@ BOOT_TEST(test_accept_fails_on_exhausted_fid,
 	/* Ok, we should be able to get another client */
 	Fid_t cli = Socket(NOPORT); ASSERT(cli!=NOFILE);
 
-	/* Call accept on another process and verify it fails */
-	Pid_t pid = Exec(accept_connection_assert_fail, sizeof(lsock), &lsock);
-	ASSERT(pid!=NOPROC);
+    /* Call accept on another process and verify it fails */
+    Pid_t pid = Exec(accept_connection_assert_fail, sizeof(lsock),&lsock);
+    ASSERT(pid!=NOPROC);
 
 	/* Now, if we try a connection we should fail! */
 	ASSERT(Connect(cli, 100, 1000)==-1);
-	ASSERT(WaitChild(pid, NULL)==pid);
+	ASSERT(WaitChild(pid,NULL)==pid);
+
 	return 0;
 }
+
 
 
 static int unblocking_accept_connection(int argl, void* args) 
@@ -1910,7 +1912,6 @@ static int unblocking_accept_connection(int argl, void* args)
 	ASSERT(Accept(lsock)==NOFILE);
 	return 0;
 }
-
 
 
 BOOT_TEST(test_accept_unblocks_on_close,

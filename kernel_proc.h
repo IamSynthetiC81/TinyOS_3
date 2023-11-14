@@ -17,6 +17,7 @@
 
 #include "tinyos.h"
 #include "kernel_sched.h"
+#include "util.h"
 
 /**
   @brief PID state
@@ -29,6 +30,13 @@ typedef enum pid_state_e {
   ALIVE,  /**< @brief The PID is given to a process */
   ZOMBIE  /**< @brief The PID is held by a zombie */
 } pid_state;
+
+enum socket_type{
+  SOCKET_LISTENER,
+  SOCKET_UNBOUND,
+  SOCKET_PEER
+};
+
 
 /**
   @brief Process Control Block.
@@ -59,8 +67,102 @@ typedef struct process_control_block {
                              @c WaitChild() */
 
   FCB* FIDT[MAX_FILEID];  /**< @brief The fileid table of the process */
+  rlnode ptcb_list;    
+  int thread_count;
+
 
 } PCB;
+//NEW PTCB STRUCTURE 
+
+typedef struct process_thread_control_block {
+
+ TCB* tcb;    /**< @brief pointer that connects PTCB with TCB */
+ Task task;   /**< @brief The thread's function */
+ int argl;
+ void* args;
+
+ int exitval;  /**< @brief the exit value */
+
+ int exited; /**< @brief exit flag*/
+ int detached;
+ CondVar exit_cv;
+ int refcount;
+
+ rlnode ptcb_list_node;
+
+} PTCB;
+
+typedef struct struct_pipe_control_block{
+
+FCB *reader , *writer ;
+
+CondVar has_space; /*For writer  */
+CondVar has_data ; /*For reader */
+
+int w_position , r_position ;
+
+char BUFFER[PIPE_BUFFER_SIZE];
+
+int empty_slots;
+
+
+}pipe_cb;
+
+//NEWW 
+//SOCKETS STRUCTURE
+typedef struct listener_socket{
+  rlnode queue;
+  CondVar req_available;
+}listener_socket;
+
+typedef struct peer_socket{
+  socket_cb* peer;
+  pipe_cb* write_pipe;
+  pipe_cb* read_pipe;
+}peer_socket;
+
+typedef struct unbound_socket{
+  rlnode unbound_sock;
+}unbound_socket;
+
+typedef struct connection_request{
+  int admitted;
+  socket_cb* peer;
+  CondVar connected_cv;
+  rlnode queue_node;
+
+}connection_request;
+
+typedef struct struct_socket_control_block{
+
+uint refcount;
+FCB* fcb;
+
+union{
+  listener_socket listener_s;
+  peer_socket peer_s;
+  unbound_socket unbound_s;
+
+};
+
+
+port_t port;
+
+enum socket_type type;
+
+}socket_cb;
+//NEWWW
+//PROCINFO STRUCTURE
+
+typedef struct procinfo_control_block{
+
+  procinfo info;
+  int PCB_cursor;
+  FCB* fcb;
+  int refcount;
+
+} procinfo_cb;
+
 
 
 /**
@@ -70,6 +172,10 @@ typedef struct process_control_block {
   any data structures related to process creation.
 */
 void initialize_processes();
+
+void start_thread();
+
+PTCB* initialize_ptcb();
 
 /**
   @brief Get the PCB for a PID.
